@@ -1,0 +1,221 @@
+---
+title: "Final Project"
+author: "Yahli Hadar"
+date: "2024-09-24"
+output:
+  pdf_document:
+    latex_engine: xelatex
+---
+
+*Libraries*
+
+```{r}
+# Load necessary libraries
+library(readxl)
+library(corrplot)
+library(dplyr)
+library(caret)
+library(glmnet)
+library(knitr)
+library(smotefamily)
+library(RANN)
+library(ggplot2)
+library(tidyr)
+library(forcats)
+
+library(rpart)
+library(rpart.plot)
+```
+
+*Data cleaning*
+
+```{r include_data_readme, comment=''}
+# Load the data
+data <- read.csv("C:/Users/yahli/OneDrive/שולחן העבודה/WA_Fn-UseC_-HR-Employee-Attrition.csv")
+
+# Convert the 'Attrition' column to a factor (categorical variable)
+data$Attrition <- as.factor(data$Attrition)
+
+# Display the first few rows to understand the data structure
+cat("First few rows of the original data:\n")
+print(head(data))
+
+# Calculate the number of rows and columns before cleaning
+initial_rows <- nrow(data)
+initial_cols <- ncol(data)
+
+# Remove specified columns
+columns_to_remove <- c("ResponseId", "add", "lang", "sday", "smonth", "syear","Progress" )
+data <- data[, !(names(data) %in% columns_to_remove)]
+
+# Remove columns with more than 50% null values
+threshold_col <- 0.5 * nrow(data)
+cleaned_data <- data[, colSums(is.na(data)) <= threshold_col]
+
+# Replace nulls in numeric columns with the median value
+numeric_columns <- sapply(cleaned_data, is.numeric)
+cleaned_data[, numeric_columns] <- lapply(cleaned_data[, numeric_columns], function(col) {
+  col[is.na(col)] <- median(col, na.rm = TRUE)
+  return(col)
+})
+
+# Remove rows with more than 50% null values
+threshold_row <- 0.5 * ncol(cleaned_data)
+cleaned_data <- cleaned_data[rowSums(is.na(cleaned_data)) <= threshold_row, ]
+
+# Calculate the number of rows and columns after cleaning
+final_rows <- nrow(cleaned_data)
+final_cols <- ncol(cleaned_data)
+
+# Display the number of rows and columns before and after cleaning
+cat("Number of rows before cleaning:", initial_rows, "\n")
+cat("Number of rows after cleaning:", final_rows, "\n")
+cat("Number of columns before cleaning:", initial_cols, "\n")
+cat("Number of columns after cleaning:", final_cols, "\n")
+
+# Define the statistic function for bootstrapping
+mean_lifesat <- function(data, indices) {
+  d <- data[indices, ]  # allows boot to select sample
+  return(mean(d$lifesat))
+}
+print(head(cleaned_data))
+
+data <- cleaned_data
+```
+*Creating model- decision tree*
+
+```{r}
+# Split the data into training and testing sets
+set.seed(123)  
+trainIndex <- createDataPartition(data$Attrition, p = 0.7, list = FALSE)
+trainData <- data[trainIndex, ]
+testData <- data[-trainIndex, ]
+
+# Build the decision tree model
+tree_model <- rpart(Attrition ~ ., data = trainData, method = "class")
+
+# Plot the decision tree
+rpart.plot(tree_model, main = "Training Set's Classification Tree")
+
+# Plot the decision tree with enhanced clarity and size
+rpart.plot(tree_model, 
+           main = "Enhanced Decision Tree",
+           type = 3,             
+           extra = 106,          # show percentage of observations and class
+           under = TRUE,         
+           cex = 0.8,            
+           fallen.leaves = TRUE, 
+           box.palette = "RdYlGn", # color the boxes
+           shadow.col = "gray",  # add shadows for clarity
+           compress = TRUE)      # compress the tree layout
+
+# Save the plot as a PNG file with higher resolution and adjusted layout
+png("decision_tree_clear.png", width = 2400, height = 1800, res = 200)
+rpart.plot(tree_model, 
+           main = "Enhanced Decision Tree",
+           type = 3,
+           extra = 106,
+           under = TRUE,
+           cex = 0.7,            # Reduce text size
+           fallen.leaves = TRUE,
+           box.palette = "RdYlGn",
+           shadow.col = "gray",
+           compress = TRUE,
+           tweak = 1.2,          # Tweak spacing
+           split.cex = 0.8)           # Full name of variables
+dev.off()  # Close the file device
+
+```
+
+*Visualization*
+
+*Correlation between total working years and attrition*
+
+```{r}
+# Load necessary libraries
+library(ggplot2)
+
+# Load the dataset
+data <- read.csv("C:/Users/yahli/OneDrive/שולחן העבודה/WA_Fn-UseC_-HR-Employee-Attrition.csv")
+
+# Convert 'Attrition' to a factor
+data$Attrition <- as.factor(data$Attrition)
+
+# Create a boxplot to visualize the distribution of TotalWorkingYears by Attrition
+ggplot(data, aes(x = Attrition, y = TotalWorkingYears, fill = Attrition)) +
+  geom_boxplot() +
+  labs(title = "Total Working Years by Attrition Status",
+       x = "Attrition",
+       y = "Total Working Years") +
+  theme_minimal()
+
+```
+
+*Impact of overtime on attrition*
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+
+# Load the dataset
+data <- read.csv("C:/Users/yahli/OneDrive/שולחן העבודה/WA_Fn-UseC_-HR-Employee-Attrition.csv")
+
+# Convert 'Attrition' to a factor
+data$Attrition <- as.factor(data$Attrition)
+
+# Calculate normalized attrition rates by Overtime status
+attrition_rates <- data %>%
+  group_by(OverTime, Attrition) %>%
+  summarise(Count = n()) %>%
+  mutate(Proportion = Count / sum(Count)) %>%
+  select(-Count) %>%
+  spread(key = Attrition, value = Proportion, fill = 0)  # Reshape for plotting
+
+# Rename columns to match the Python example
+names(attrition_rates) <- c("OverTime", "No Attrition", "Attrition")
+
+# Reshape for plotting
+attrition_rates_long <- attrition_rates %>%
+  gather(key = "Attrition_Status", value = "Proportion", `No Attrition`, Attrition)
+
+# Create the bar chart
+ggplot(attrition_rates_long, aes(x = OverTime, y = Proportion, fill = Attrition_Status)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_fill_manual(values = c("Attrition" = "#f3952f", "No Attrition" = "#add4e6")) +
+  labs(
+    title = "Attrition Rates by Overtime Status",
+    x = "OverTime Status",
+    y = "Proportion",
+    fill = "Attrition Status"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    axis.title.x = element_text(color = "black", face = "bold"),
+    axis.title.y = element_text(color = "black", face = "bold"),
+    legend.title = element_text(color = "blue", face = "bold")
+  )
+```
+
+*connection between monthly income and age*
+
+```{r}
+# Load necessary libraries
+library(ggplot2)
+
+# Load the dataset
+df <- read.csv("C:/Users/yahli/OneDrive/שולחן העבודה/WA_Fn-UseC_-HR-Employee-Attrition.csv")
+
+# Create the scatter plot
+ggplot(df, aes(x = Age, y = MonthlyIncome)) +
+  geom_point(color = "#137AA8") +
+  labs(
+    title = "Age vs. Monthly Income",
+    x = "Age",
+    y = "Monthly Income"
+  ) +
+  theme_minimal()
+```
+
